@@ -4,8 +4,9 @@ namespace App\Http\Controllers\Design\GenerateImage;
 
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
-use App\Models\DesignModel\GenerateImageModel\GenerateImage;
+use App\Models\DesignModel\GenerateImageModel\GenerateImageModel;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class GenerateImageController extends Controller
 {
@@ -21,36 +22,43 @@ class GenerateImageController extends Controller
         $style = $request->input('style');
         $aspect_ratio = $request->input('aspect_ratio');
     
-        // Map aspect_ratio to valid OpenAI size
+        // Map aspect_ratio to valid DALL-E 3 sizes
         $sizeMap = [
-            '1:1' => '512x512',
-            '4:3' => '512x384',
-            '16:9' => '1024x576', // Note: This is not a valid OpenAI size, so fallback to closest valid size
+            '1:1' => '1024x1024',
+            '16:9' => '1792x1024',
+            '9:16' => '1024x1792', // Common portrait aspect ratio
+            '4:3' => '1024x1024', // Fallback to square for similar ratios
+            '3:4' => '1024x1792', // Portrait
         ];
     
-        // Use valid sizes only: fallback to '512x512' if not recognized
-        $size = $sizeMap[$aspect_ratio] ?? '512x512';
+        $size = $sizeMap[$aspect_ratio] ?? '1024x1024';
     
-        // Since OpenAI only supports 256x256, 512x512, 1024x1024, adjust accordingly:
-        if (!in_array($size, ['256x256', '512x512', '1024x1024'])) {
-            $size = '512x512'; // fallback to a valid size
-        }
-    
-        $response = Http::withToken(env('OPENAI_API_KEY'))
+        $response = Http::withToken(config('services.openai.key'))
             ->post('https://api.openai.com/v1/images/generations', [
-                'model' => 'dall-e-3', // specify the model
-                'prompt' => "$prompt, $style",
+                'model' => 'dall-e-3',
+                'prompt' => "$prompt, in a $style style", // Refined prompt
                 'n' => 1,
                 'size' => $size,
+                'quality' => 'standard', // Specify quality for clarity
             ]);
     
         if (!$response->successful()) {
-            return response()->json(['error' => 'Failed to generate image'], 500);
+            // Log the entire response for debugging
+            Log::error('OpenAI API request failed.', [
+                'status' => $response->status(),
+                'response' => $response->body(),
+            ]);
+
+            // Return a more detailed error to the client
+            return response()->json([
+                'error' => 'Failed to generate image from API.',
+                'details' => $response->json() // The actual error from OpenAI
+            ], $response->status());
         }
-    
+        
         $imageUrl = $response->json('data.0.url');
     
-        $image = GenerateImage::create([
+        $image = GenerateImageModel::create([
             'prompt' => $prompt,
             'style' => $style,
             'aspect_ratio' => $aspect_ratio,
